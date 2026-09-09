@@ -9,6 +9,12 @@ on:
         description: Kiosk URL to inspect
         required: false
         default: https://kiosk.na1.qless.com/kiosk/app/home/100100000129
+      script:
+        description: Which recon script to run
+        required: false
+        default: recon.py
+        type: choice
+        options: [recon.py, recon2.py]
 
 jobs:
   recon:
@@ -30,7 +36,7 @@ jobs:
       - name: Run recon
         env:
           QLESS_KIOSK_URL: ${{ inputs.kiosk_url || 'https://kiosk.na1.qless.com/kiosk/app/home/100100000129' }}
-        run: python tools/qless/recon.py
+        run: python tools/qless/${{ inputs.script || 'recon.py' }}
 
       - uses: actions/upload-artifact@v4
         if: always()
