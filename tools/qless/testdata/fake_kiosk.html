@@ -1,13 +1,21 @@
 <!doctype html><meta charset=utf-8><title>Fake kiosk</title>
+<!-- Mirrors the real KCCH kiosk wizard: it opens on a name/phone step whose
+     only controls are #qBtnBack and #qBtnNext (both starting disabled), not
+     a service list. Getting this wrong is what made the first version of the
+     probe unable to leave the front page. -->
 <div id=app></div>
+<button id=qBtnBack class="btn btn-nav btn-back btn-disabled">Back</button>
+<button id=qBtnNext class="btn btn-nav btn-next btn-disabled">Next</button>
 <script>
 const S = {};
-S.home = `<h1>Welcome</h1><button onclick="go('services')">Schedule an Appointment</button>
-          <button onclick="go('home')">Join the Line</button>`;
+S.identity = `<h1 id=consumerInfoMsg>Please provide your name and phone number.</h1>
+  <input name=firstName placeholder="First name">
+  <input name=lastName placeholder="Last name">
+  <input name=phoneNumber placeholder="Mobile phone">`;
 S.services = `<h2>Select a service</h2>
   <button onclick="go('slots')">Concealed Pistol License</button>
   <button onclick="go('slots')">Alien Firearm License</button>
-  <button onclick="go('slots')">Address Change</button>`;
+  <button onclick="go('slots')">Change of Address</button>`;
 S.slots = `<h2>Available times</h2>
   <button disabled>October 02, 2026 8:00 AM (full)</button>
   <button onclick="go('details')">October 14, 2026 9:30 AM</button>
@@ -16,12 +24,26 @@ S.slots = `<h2>Available times</h2>
 S.details = `<h2>Your information</h2>
   <input name=firstName placeholder="First name">
   <input name=lastName placeholder="Last name">
-  <input name=phoneNumber placeholder="Mobile phone">
   <input name=emailAddress type=email placeholder="Email">
   <button onclick="go('review')">Continue</button>`;
 S.review = `<h2>Review</h2><p>Alien Firearm License &mdash; October 14, 2026 9:30 AM</p>
   <button onclick="go('done')">Confirm Appointment</button>`;
 S.done = `<h2>Confirmed!</h2><p>You're all set. See you then.</p>`;
-function go(s){ document.getElementById('app').innerHTML = S[s]; }
-go('home');
+
+let screen = 'identity';
+function go(s){ screen = s; document.getElementById('app').innerHTML = S[s]; sync(); }
+
+// Next enables only once the identity fields are filled, like the real one.
+function sync(){
+  const next = document.getElementById('qBtnNext');
+  const inputs = [...document.querySelectorAll('#app input')];
+  const ready = screen === 'identity' && inputs.length > 0
+                && inputs.every(i => i.value.trim() !== '');
+  next.className = 'btn btn-nav btn-next' + (ready ? '' : ' btn-disabled');
+}
+document.addEventListener('input', sync);
+document.getElementById('qBtnNext').addEventListener('click', () => {
+  if (screen === 'identity') go('services');
+});
+go('identity');
 </script>

@@ -66,6 +66,7 @@ jobs:
           QLESS_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
           QLESS_ROUNDS: ${{ vars.QLESS_ROUNDS || '3' }}
           QLESS_ROUND_SLEEP: ${{ vars.QLESS_ROUND_SLEEP || '90' }}
+          QLESS_MAX_DAYS: ${{ vars.QLESS_MAX_DAYS || '60' }}
         run: |
           set +e
           python tools/qless/probe.py
