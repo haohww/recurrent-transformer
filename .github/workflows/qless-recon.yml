@@ -14,7 +14,7 @@ on:
         required: false
         default: recon.py
         type: choice
-        options: [recon.py, recon2.py]
+        options: [recon.py, recon2.py, recon3.py]
 
 jobs:
   recon:
