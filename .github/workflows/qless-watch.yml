@@ -31,6 +31,12 @@ permissions:
 
 jobs:
   watch:
+    # Off until the repository variable QLESS_ENABLED is set to "true".
+    # The flow's selectors have to be confirmed against the live site with a
+    # dry run first; until then a scheduled run would just fail every five
+    # minutes. Turn it on with:
+    #   gh variable set QLESS_ENABLED --body true
+    if: vars.QLESS_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
