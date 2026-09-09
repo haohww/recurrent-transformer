@@ -73,13 +73,45 @@ def cutoff_date() -> dt.date:
     return dt.date.fromisoformat(raw)
 
 
+# Values that must never appear in a captured artifact. On a public
+# repository anyone can download these, so the personal details get masked
+# out of both the screenshot and the DOM dump.
+def _secrets() -> list[str]:
+    return [v for v in (FIRST_NAME, LAST_NAME, PHONE, EMAIL) if v and len(v) > 2]
+
+
+MASK_STYLE = """
+  input, textarea { -webkit-text-security: disc !important; text-security: disc !important;
+                    color: transparent !important; text-shadow: 0 0 8px rgba(0,0,0,.7) !important; }
+"""
+
+
+def scrub(text: str) -> str:
+    for value in _secrets():
+        text = text.replace(value, "[REDACTED]")
+    return text
+
+
 def shoot(page: Page, name: str) -> None:
+    """Capture a step, with typed-in personal details masked.
+
+    The mask is pure CSS so the live form is never mutated -- rewriting the
+    DOM to hide values could break the booking we are trying to make.
+    """
     OUT.mkdir(parents=True, exist_ok=True)
+    handle = None
     try:
+        handle = page.add_style_tag(content=MASK_STYLE)
         page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
-        (OUT / f"{name}.html").write_text(page.content(), encoding="utf-8")
+        (OUT / f"{name}.html").write_text(scrub(page.content()), encoding="utf-8")
     except Exception as exc:
         log(f"could not capture {name}: {exc}")
+    finally:
+        if handle is not None:
+            try:
+                handle.evaluate("el => el.remove()")
+            except Exception:
+                pass
 
 
 def clickables(page: Page) -> list[dict]:
@@ -210,7 +242,7 @@ def attempt(page: Page, cutoff: dt.date) -> str:
         log("no dated slots found on this page -- see 03-slots.html")
         return BROKEN
 
-    log(f"offered: {[(str(d), l[:40]) for d, l in slots[:20]]}")
+    log(f"offered: {[(str(d), scrub(l)[:40]) for d, l in slots[:20]]}")
     eligible = [(d, l) for d, l in slots if d < cutoff]
     if not eligible:
         log(f"earliest offered is {slots[0][0]}, cutoff is {cutoff} -- nothing to take")
