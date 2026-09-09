@@ -1,9 +1,18 @@
 """Watch a QLess kiosk for an earlier appointment slot and grab it.
 
-The kiosk is a single-page app, so this drives a real browser rather than
-guessing at an internal API. Every step logs what it saw and screenshots the
-page, which is what makes a failed run repairable: the artifact shows exactly
-which step stopped matching.
+Two halves, deliberately different:
+
+  * DETECTION goes through the XML API (qless_api). It is one cheap POST,
+    needs no browser, and its contract is verified against the live site.
+  * BOOKING drives the real wizard in a browser. The booking endpoint's
+    payload could not be recovered -- the code that builds it is in a module
+    the app only loads once a slot is selectable, and the calendar has been
+    empty -- so the booking follows the same path a person would, which is
+    the option most likely to work without having been rehearsed.
+
+Because detection is cheap, the browser only starts when a slot actually
+exists. Every booking step screenshots the page (with personal details
+masked) so a first real attempt is diagnosable even if it fails.
 
 Configuration is entirely by environment variable so that no personal data
 ever lands in the repository -- see .github/workflows/qless-watch.yml, which
@@ -33,6 +42,9 @@ import sys
 import time
 
 from playwright.sync_api import Page, TimeoutError as PWTimeout, sync_playwright
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from qless_api import QLessError, get_wssid, possible_blocks  # noqa: E402
 
 BOOKED_EXIT = 10
 BROKEN_EXIT = 1
@@ -151,6 +163,23 @@ def click_matching(page: Page, pattern: re.Pattern, what: str) -> bool:
     return False
 
 
+def advance(page: Page) -> bool:
+    """Press the wizard's Next button if it is enabled."""
+    for selector in ("#qBtnNext", "button.btn-next"):
+        el = page.query_selector(selector)
+        if not el:
+            continue
+        classes = el.get_attribute("class") or ""
+        if "btn-disabled" in classes or el.get_attribute("disabled"):
+            log(f"{selector} is disabled")
+            continue
+        el.click(timeout=10_000)
+        page.wait_for_load_state("networkidle", timeout=30_000)
+        page.wait_for_timeout(1_500)
+        return True
+    return click_matching(page, re.compile(r"next|continue", re.I), "next")
+
+
 def parse_dates(text: str) -> list[dt.date]:
     """Pull every date out of a blob of UI text, newest format wins."""
     found: list[dt.date] = []
@@ -211,18 +240,64 @@ def fill_details(page: Page) -> None:
                 break
 
 
+def api_eligible(cutoff: dt.date) -> tuple[str, list]:
+    """Ask the API for slots earlier than `cutoff`.
+
+    Returns (status, eligible_blocks). An empty calendar is NONE, not
+    BROKEN: this queue is usually empty and only frees up on cancellations.
+    A transport or contract failure is BROKEN so the run fails loudly rather
+    than looking like "nothing available" forever.
+    """
+    max_days = int(os.environ.get("QLESS_MAX_DAYS", "60"))
+    try:
+        wssid = get_wssid()
+    except Exception as exc:
+        log(f"could not fetch wssid: {exc}")
+        wssid = ""
+
+    try:
+        blocks, raw = possible_blocks(max_days=max_days, wssid=wssid)
+    except QLessError as exc:
+        log(f"availability query failed: {exc}")
+        return BROKEN, []
+    except Exception as exc:
+        log(f"availability query error: {type(exc).__name__}: {exc}")
+        return BROKEN, []
+
+    (OUT / "availability.xml").write_text(raw, encoding="utf-8")
+    log(f"API offered {len(blocks)} slot(s) within {max_days} days")
+    for block in blocks[:20]:
+        log(f"  {block}")
+
+    eligible = [b for b in blocks if b.date < cutoff]
+    if not blocks:
+        log("calendar is empty -- nothing to take")
+        return NONE, []
+    if not eligible:
+        log(f"earliest offered is {blocks[0].date}, cutoff is {cutoff}")
+        return NONE, []
+    log(f"{len(eligible)} slot(s) earlier than {cutoff}: {[str(b) for b in eligible[:5]]}")
+    return BOOKED, eligible
+
+
 def attempt(page: Page, cutoff: dt.date) -> str:
-    """One pass of the flow, returning BOOKED, NONE or BROKEN."""
+    """Book via the wizard. Only called once the API says a slot exists."""
     log(f"opening {KIOSK_URL}")
     page.goto(KIOSK_URL, wait_until="networkidle", timeout=90_000)
     page.wait_for_timeout(3_000)
     shoot(page, "01-home")
 
-    entry = re.compile(r"appoint|schedul|book|reserv", re.I)
-    if not click_matching(page, entry, "appointment entry point"):
-        log("FLOW BROKE at the entry point -- see 01-home.html for the real labels")
+    # The kiosk opens on a name/phone step whose only controls are
+    # #qBtnBack and #qBtnNext, so fill the identity fields and advance
+    # rather than looking for an "appointment" button that is not there.
+    fill_details(page)
+    if not advance(page):
+        log("FLOW BROKE at the first step -- see 01-home.html")
         return BROKEN
     shoot(page, "02-services")
+
+    entry = re.compile(r"appoint|schedul|book|reserv", re.I)
+    click_matching(page, entry, "appointment entry point")
 
     if not click_matching(page, SERVICE_RE, "service"):
         log("FLOW BROKE at service selection -- see 02-services.html")
@@ -287,9 +362,11 @@ def attempt(page: Page, cutoff: dt.date) -> str:
 
 
 def main() -> int:
+    # The kiosk's appointmentConsumerFields are FIRST_NAME, LAST_NAME and
+    # EMAIL. Phone belongs to the queue-join flow, so it stays optional.
     missing = [n for n, v in [("QLESS_FIRST_NAME", FIRST_NAME),
                               ("QLESS_LAST_NAME", LAST_NAME),
-                              ("QLESS_PHONE", PHONE)] if not v]
+                              ("QLESS_EMAIL", EMAIL)] if not v]
     if missing and not DRY_RUN:
         log(f"refusing to run without {', '.join(missing)}")
         return 1
@@ -301,36 +378,52 @@ def main() -> int:
     log(f"cutoff={cutoff} service={SERVICE_RE.pattern!r} dry_run={DRY_RUN} rounds={rounds}")
     broken = False
 
-    with sync_playwright() as p:
-        # CHROMIUM_PATH lets this run against a preinstalled browser when the
-        # Playwright package and the browser bundle are versioned separately.
-        browser = p.chromium.launch(
-            executable_path=os.environ.get("CHROMIUM_PATH") or None
-        )
-        for round_no in range(1, rounds + 1):
-            log(f"--- round {round_no}/{rounds} ---")
-            context = browser.new_context(viewport={"width": 1280, "height": 2000})
-            page = context.new_page()
-            try:
-                result = attempt(page, cutoff)
-                if result == BOOKED:
+    for round_no in range(1, rounds + 1):
+        log(f"--- round {round_no}/{rounds} ---")
+        status, eligible = api_eligible(cutoff)
+
+        if status == BROKEN:
+            broken = True
+        elif status == BOOKED:
+            # A slot exists. Now, and only now, open a browser to take it.
+            log("slot available -- opening a browser to book")
+            with sync_playwright() as p:
+                # CHROMIUM_PATH lets this run against a preinstalled browser
+                # when the Playwright package and browser bundle are
+                # versioned separately.
+                browser = p.chromium.launch(
+                    executable_path=os.environ.get("CHROMIUM_PATH") or None
+                )
+                context = browser.new_context(
+                    viewport={"width": 1280, "height": 2000},
+                    timezone_id="America/Los_Angeles",
+                )
+                page = context.new_page()
+                try:
+                    if attempt(page, cutoff) == BOOKED:
+                        return BOOKED_EXIT
+                    broken = True
+                except PWTimeout as exc:
+                    log(f"timeout: {exc}")
+                    shoot(page, f"error-round{round_no}")
+                    broken = True
+                except Exception as exc:
+                    log(f"error: {exc}")
+                    shoot(page, f"error-round{round_no}")
+                    broken = True
+                finally:
                     context.close()
                     browser.close()
-                    return BOOKED_EXIT
-                broken = broken or result == BROKEN
-            except PWTimeout as exc:
-                log(f"timeout: {exc}")
-                shoot(page, f"error-round{round_no}")
-                broken = True
-            except Exception as exc:
-                log(f"error: {exc}")
-                shoot(page, f"error-round{round_no}")
-                broken = True
-            finally:
-                context.close()
-            if round_no < rounds:
-                time.sleep(sleep_s)
-        browser.close()
+
+            # A slot was there and we did not confirm it. Fail loudly: the
+            # artifact shows how far the wizard got, and a missed
+            # cancellation is exactly what this exists to prevent.
+            if broken:
+                log("a slot was available but the wizard did not confirm it")
+
+        if round_no < rounds:
+            time.sleep(sleep_s)
+
     return BROKEN_EXIT if broken else 0
 
 

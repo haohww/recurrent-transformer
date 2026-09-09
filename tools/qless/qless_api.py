@@ -17,11 +17,14 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import os
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
-BASE = "https://kiosk.na1.qless.com"
+# QLESS_API_BASE points the client at a stub for offline testing; the live
+# site is the default.
+BASE = os.environ.get("QLESS_API_BASE", "https://kiosk.na1.qless.com")
 API = f"{BASE}/qless/api/v1"
 
 # King County Courthouse records unit; "CPL/AFL Appointments".
