@@ -1,0 +1,27 @@
+<!doctype html><meta charset=utf-8><title>Fake kiosk</title>
+<div id=app></div>
+<script>
+const S = {};
+S.home = `<h1>Welcome</h1><button onclick="go('services')">Schedule an Appointment</button>
+          <button onclick="go('home')">Join the Line</button>`;
+S.services = `<h2>Select a service</h2>
+  <button onclick="go('slots')">Concealed Pistol License</button>
+  <button onclick="go('slots')">Alien Firearm License</button>
+  <button onclick="go('slots')">Address Change</button>`;
+S.slots = `<h2>Available times</h2>
+  <button disabled>October 02, 2026 8:00 AM (full)</button>
+  <button onclick="go('details')">October 14, 2026 9:30 AM</button>
+  <button onclick="go('details')">October 30, 2026 1:00 PM</button>
+  <button onclick="go('details')">November 03, 2026 10:00 AM</button>`;
+S.details = `<h2>Your information</h2>
+  <input name=firstName placeholder="First name">
+  <input name=lastName placeholder="Last name">
+  <input name=phoneNumber placeholder="Mobile phone">
+  <input name=emailAddress type=email placeholder="Email">
+  <button onclick="go('review')">Continue</button>`;
+S.review = `<h2>Review</h2><p>Alien Firearm License &mdash; October 14, 2026 9:30 AM</p>
+  <button onclick="go('done')">Confirm Appointment</button>`;
+S.done = `<h2>Confirmed!</h2><p>You're all set. See you then.</p>`;
+function go(s){ document.getElementById('app').innerHTML = S[s]; }
+go('home');
+</script>

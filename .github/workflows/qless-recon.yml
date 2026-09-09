@@ -1,0 +1,40 @@
+name: QLess recon
+
+# Manual only. Maps out the kiosk site's endpoints so the probe can be written
+# against them. Read-only: it loads pages and records network traffic.
+on:
+  workflow_dispatch:
+    inputs:
+      kiosk_url:
+        description: Kiosk URL to inspect
+        required: false
+        default: https://kiosk.na1.qless.com/kiosk/app/home/100100000129
+
+jobs:
+  recon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Playwright
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Run recon
+        env:
+          QLESS_KIOSK_URL: ${{ inputs.kiosk_url || 'https://kiosk.na1.qless.com/kiosk/app/home/100100000129' }}
+        run: python tools/qless/recon.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qless-recon
+          path: recon-out/
+          retention-days: 7
